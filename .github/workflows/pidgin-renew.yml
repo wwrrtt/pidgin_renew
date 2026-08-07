@@ -1,0 +1,53 @@
+name: Renew pidgin
+
+on:
+  schedule:
+    - cron: '0 12 */15 * *'
+  workflow_dispatch:
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Setup Xray proxy (optional)
+        if: ${{ secrets.XRAY_CONFIG_JSON != '' }}
+        env:
+          XRAY_CONFIG_JSON: ${{ secrets.XRAY_CONFIG_JSON }}
+        run: |
+          curl -sL -o xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+          unzip -q xray.zip -d xray
+          chmod +x xray/xray
+          python -c "import os; open('xray_config.json','w').write(os.environ['XRAY_CONFIG_JSON'])"
+          ./xray/xray run -c xray_config.json &
+          echo "XRAY_PID=$!" >> $GITHUB_ENV
+          sleep 3
+          echo "=== Current IP (via proxy) ==="
+          curl -s --socks5 127.0.0.1:10808 https://ip.sb
+          echo ""
+
+      - name: Run renew
+        run: python pidgin_renew.py
+        env:
+          PIDGIN_EMAIL: ${{ secrets.PIDGIN_EMAIL }}
+          PIDGIN_PASSWORD: ${{ secrets.PIDGIN_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          PROXY_SOCKS5: socks5://127.0.0.1:10808
+
+      - name: Cleanup xray
+        if: always()
+        run: kill ${{ env.XRAY_PID }} 2>/dev/null && echo "Xray stopped" || echo "Xray already stopped"
