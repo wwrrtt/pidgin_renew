@@ -6,6 +6,7 @@ Environment variables:
   PIDGIN_PASSWORD    - account password
   TG_BOT_TOKEN       - Telegram bot token (optional, for notifications)
   TG_CHAT_ID         - Telegram chat ID (optional, for notifications)
+  PROXY_SOCKS5       - SOCKS5 proxy URL, e.g. socks5://127.0.0.1:10808 (optional)
 """
 
 import os
@@ -76,7 +77,7 @@ def main():
     t0 = time.monotonic()
 
     print("Launching headless browser...")
-    browser = launch(headless=True)
+    browser = launch(headless=True, proxy=os.environ.get("PROXY_SOCKS5") or None)
     page = browser.new_page()
 
     try:
@@ -118,30 +119,35 @@ def main():
         result["server"] = extract_server_name(old_text)
         print(f"  Server: {result['server']}, days: {result['old_days']}")
 
-        # ── Click Extend ───────────────────────────────────────────────
-        print("[6/6] Clicking 'Extend 30 days'...")
-        page.locator('button:has-text("Extend 30 days")').click()
-        page.wait_for_timeout(5_000)
-
-        # ── Verify ─────────────────────────────────────────────────────
-        new_text = page.locator(':has-text("This free server expires in")').first.inner_text().strip()
-        result["new_days"] = extract_days(new_text)
-        print(f"  New days: {result['new_days']}")
-
-        if result["new_days"] is not None and result["old_days"] is not None:
-            if result["new_days"] > result["old_days"]:
-                result["status"] = "success"
-            elif result["new_days"] == result["old_days"]:
-                result["status"] = "unchanged"
-                result["error"] = "Days didn't change — already at max or rate-limited"
-            else:
-                result["status"] = "regression"
-                result["error"] = f"Days decreased ({result['old_days']} → {result['new_days']})"
-        elif result["new_days"] == 30:
-            result["status"] = "success"
+        # Already at 30 days — nothing to extend
+        if result["old_days"] == 30:
+            result["new_days"] = 30
+            result["status"] = "noop"
         else:
-            result["status"] = "parse_error"
-            result["error"] = f"Cannot parse days from: {new_text[:200]}"
+            # ── Click Extend ───────────────────────────────────────────
+            print("[6/6] Clicking 'Extend 30 days'...")
+            page.locator('button:has-text("Extend 30 days")').click()
+            page.wait_for_timeout(5_000)
+
+            # ── Verify ─────────────────────────────────────────────────
+            new_text = page.locator(':has-text("This free server expires in")').first.inner_text().strip()
+            result["new_days"] = extract_days(new_text)
+            print(f"  New days: {result['new_days']}")
+
+            if result["new_days"] is not None and result["old_days"] is not None:
+                if result["new_days"] > result["old_days"]:
+                    result["status"] = "success"
+                elif result["new_days"] == result["old_days"]:
+                    result["status"] = "unchanged"
+                    result["error"] = "Days didn't change — already at max or rate-limited"
+                else:
+                    result["status"] = "regression"
+                    result["error"] = f"Days decreased ({result['old_days']} → {result['new_days']})"
+            elif result["new_days"] == 30:
+                result["status"] = "success"
+            else:
+                result["status"] = "parse_error"
+                result["error"] = f"Cannot parse days from: {new_text[:200]}"
 
     except Exception as e:
         if not result["error"]:
@@ -157,7 +163,7 @@ def main():
     status_emoji = {
         "success": "✅", "unchanged": "⚠️", "regression": "❌",
         "login_failed": "🔒", "parse_error": "🐛", "exception": "💥",
-        "unknown": "❓",
+        "noop": "⏭️", "unknown": "❓",
     }
     emoji = status_emoji.get(result["status"], "❓")
 
@@ -180,7 +186,7 @@ def main():
     print("\n" + md)
     send_telegram(md)
 
-    if result["status"] in ("success", "unchanged"):
+    if result["status"] in ("success", "unchanged", "noop"):
         sys.exit(0)
     else:
         sys.exit(1)
